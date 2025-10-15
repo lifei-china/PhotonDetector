@@ -1,0 +1,56 @@
+# ===============================
+#  General ignore rules for PhotonDetector project
+#  (Python + Jupyter + experimental data)
+# ===============================
+
+# ---- Virtual environment ----
+.venv/
+venv/
+env/
+
+# ---- Python cache & temp ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# ---- Jupyter Notebook ----
+.ipynb_checkpoints/
+*.ipynb~   # 临时副本
+
+# ---- Data files (optional) ----
+# 如果你想同步数据文件，请删除这一段
+*.h5
+*.csv
+*.xlsx
+*.xls
+*.zip
+*.dat
+*.npz
+*.npy
+*.json 
+*.png
+
+# ---- Output folders ----
+output_raw/
+plots/
+h5file/
+results/
+logs/
+
+# ---- System / Editor files ----
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.bak
+*.tmp
+
+# ---- VSCode config ----
+.vscode/
+.history/
+*.code-workspace
+
+# ---- Windows hidden folders ----
+$RECYCLE.BIN/
