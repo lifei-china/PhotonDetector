@@ -80,8 +80,8 @@ def generate_signal(spectrum_bins, spectrum_pdf, rate, T_total=400e-6,
     # energies = bin_centers[np.clip(idx, 0, len(bin_centers) - 1)]
     # amplitudes = gain * energies
     # 假设你有 bin_edges 和为每个事件找到的 bin 索引 idx            # second method  
-    left  = spectrum_bins[idx]                                    # second method
-    right = spectrum_bins[idx + 1]                                # second method
+    left  = spectrum_bins[idx] - 0.5                                    # second method
+    right = spectrum_bins[idx] + 0.5                               # second method
     energies = left + np.random.rand(len(idx)) * (right - left)  # second method # 在区间内均匀抽样
     amplitudes = gain * energies                                  # second method    
 
