@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
- 
+import math 
 
 def add_gaussian_pulse(signal, t0, amplitude, fwhm, dt):
     """
@@ -239,7 +239,7 @@ def plot_signals_over_time(
     plt.title(title)
     plt.grid(alpha=0.3)
     if len(signals) <= 5 :
-        plt.legend()
+        plt.legend(loc="upper right")
     plt.tight_layout()
     plt.show()
 
@@ -402,3 +402,108 @@ def quick_overlap_metrics(times, pulse_width, rate=None):
     else:
         print(f"[重叠比例]  overlap_frac≈{frac:.3f}")
     return frac
+
+
+# ---------------------------------------------------------
+# 以下是读取不同管压和滤片生成的光谱的数据
+# ---------------------------------------------------------
+
+# ---------------------------------------------------------
+# 工具函数：自动读取两列数字（SpekCalc 与 XCOM CSV 通用）
+# ---------------------------------------------------------
+def load_two_cols(path):
+    E, Y = [], []
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        for ln in f:
+            s = ln.strip().split()
+            if len(s) < 2:
+                continue
+            try:
+                e = float(s[0]); y = float(s[1])
+            except ValueError:
+                continue
+            E.append(e); Y.append(y)
+    E = np.asarray(E, float); Y = np.asarray(Y, float)
+    idx = np.argsort(E)
+    return E[idx], Y[idx]
+
+
+# ---------------------------------------------------------
+# ⭐ 主函数：光谱衰减计算
+# ---------------------------------------------------------
+def compute_filtered_spectrum(
+    spek_path,
+    xcom_filter_path,
+    density,
+    thickness_mm_list,
+    plot=True
+):
+    """
+    参数:
+        spek_path:          spekcalc 导出的光谱 txt
+        xcom_filter_path:   滤片材料的 (mu/rho) CSV
+        density:            滤片密度 [g/cm^3]
+        thickness_mm_list:  滤片厚度 (可单值 或 list)
+        plot:               是否绘制光谱图
+    
+    返回:
+        E_keV:             能量 (keV)
+        Phi_in:            原始谱
+        Phi_out_list:      对应每个厚度的衰减光谱(list)
+    """
+
+    # ------------------ 1. 读光源光谱 ------------------
+    E_keV, Phi_in = load_two_cols(spek_path)
+
+    # ------------------ 2. 读 XCOM μ/ρ ------------------
+    Ex_MeV, mu_over_rho = load_two_cols(xcom_filter_path)
+    Ex_keV = Ex_MeV * 1000.0  # MeV → keV
+
+    # μ/ρ 插值到 spek 能量上
+    mu_rho_interp = np.interp(
+        E_keV, Ex_keV, mu_over_rho,
+        left=mu_over_rho[0], right=mu_over_rho[-1]
+    )
+
+    # μ(E) = (μ/ρ) × 密度
+    mu_cm_inv = mu_rho_interp * density
+
+    # 若 thickness_mm_list 是单值 → 转换成 list
+    if not isinstance(thickness_mm_list, (list, tuple, np.ndarray)):
+        thickness_mm_list = [thickness_mm_list]
+
+    Phi_out_list = []
+
+    # ------------------ 3. 计算每个厚度的衰减谱 ------------------
+    for t_mm in thickness_mm_list:
+        x_cm = t_mm * 0.1    # mm → cm
+        T = np.exp(-mu_cm_inv * x_cm)
+        Phi_out = Phi_in * T
+        Phi_out_list.append(Phi_out)
+
+    # ------------------ 4. 是否绘图 ------------------
+    if plot:
+        plt.figure(figsize=(10, 6))
+        plt.plot(E_keV, Phi_in, 'k-', linewidth=2, label="Source Spectrum")
+
+        colors = ['red','blue','green','orange','purple','cyan']
+        styles = ['-','--','-.',':','-', '--']
+
+        for i, (t_mm, Phi_out) in enumerate(zip(thickness_mm_list, Phi_out_list)):
+            plt.plot(E_keV, Phi_out,
+                     color=colors[i % len(colors)],
+                     linestyle=styles[i % len(styles)],
+                     linewidth=1.8,
+                     label=f"Filter {t_mm} mm")
+
+        plt.xlabel("Energy (keV)")
+        plt.ylabel("Relative Intensity (a.u.)")
+        plt.title("Filtered X-ray Spectrum")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.show()
+
+    return E_keV, Phi_in, Phi_out_list
+
+ 
