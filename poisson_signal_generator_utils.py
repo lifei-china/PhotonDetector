@@ -38,8 +38,8 @@ def add_gaussian_pulse(signal, t0, amplitude, fwhm, dt):
         signal[j0:j1] += amplitude * g[gj0:gj1]
 
 
-def generate_signal(spectrum_bins, spectrum_pdf, rate, T_total=400e-6,
-                    pulse_width=25e-9, dt=1e-9, gain=1.0,
+def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
+                    pulse_width=25e-9, dt=1e-9, g_mat = 1, Cf = 40e-15,
                     pulse_shape='rect',          # 'rect' 或 'gauss'
                     ):
     """"
@@ -51,13 +51,13 @@ def generate_signal(spectrum_bins, spectrum_pdf, rate, T_total=400e-6,
     T_total       | 采样积分总时间(秒)                                     | 400e-6 (400 μs)   
     pulse_width   | 每个脉冲宽度(秒)                                       | 25e-9 (25 ns) 
     dt            | 采样时间步长(秒)                                       | 1e-9 (1 ns)   
-    gain          | 幅度放大系数，用于将能量转成信号幅度                    | 可设 1.0       
+    g_mat         | 1 keV 的光子产生的 电子数                               | 可设 1.0     
+    Capacitance   | 典型的 CdTe/CZT PCD 前端电容量级                        | 40e-15 F        
+  
     """
     # 1）归一化谱
-    pdf = spectrum_pdf / np.sum(spectrum_pdf)
-    # pdf = spectrum_pdf
-    cdf = np.cumsum(pdf)
-    bin_centers = (spectrum_bins[:-1] + spectrum_bins[1:]) / 2
+    pdf = spectrum_pdf / np.sum(spectrum_pdf) 
+    cdf = np.cumsum(pdf) 
  
 
     # 2）泊松过程生成到达时间
@@ -65,39 +65,36 @@ def generate_signal(spectrum_bins, spectrum_pdf, rate, T_total=400e-6,
     # 循环执行， 得到从 0 到 T_total 内所有的随机到达时间。
     while t < T_total:
         # “模拟一次新的光子到达” → “时间向前跳一个随机的间隔 Δt”。
-        # np.random.exponential(1.0 / rate) 为一个随机时间间隔 Δt
-        t += np.random.exponential(1.0 / rate)  # rate 光子到达的平均时间间隔
+        #  这里，np.random.exponential(1.0 / photon_rate) 为一个随机时间间隔 Δt
+        t += np.random.exponential(1.0 / photon_rate)  # photon_rate 光子到达的平均时间间隔
         if t < T_total:
             times.append(t)
     times = np.array(times)
  
 
     # 3）根据谱抽样能量
-    u = np.random.rand(len(times))  # 随机均匀地抽取 N 个光子，赋予一个随机数，这些随机数在0-1之间
-    idx = np.searchsorted(cdf, u)   # 
+    u = np.random.rand(len(times))  # 随机均匀地抽取 N(len(times)) 个光子，赋予一个随机数，这些随机数在0-1之间
+    idx = np.searchsorted(cdf, u)   # 通过u里的随机数，与cdf表匹配，生成idx，这是不同的能量区间
 
 
-    # 4）对能谱做更细的抽样，得到连续谱，而非阶梯状的谱
-    # energies = bin_centers[np.clip(idx, 0, len(bin_centers) - 1)]
-    # amplitudes = gain * energies
-    # 假设你有 bin_edges 和为每个事件找到的 bin 索引 idx             # second method  
-    left  = spectrum_bins[idx] - 0.5                              # second method
-    right = spectrum_bins[idx] + 0.5                              # second method
-    energies = left + np.random.rand( len(idx)) * (right - left)  # second method # 在区间内均匀抽样，np.random.rand( len(idx))生成idx个1以内的随机数。中心值加这个随机数，细化
-    amplitudes = gain * energies                                  # second method    
- 
+    # 4）对能谱做更细的抽样，得到连续谱，而非阶梯状的谱        
+    # spectrum_bins[idx] 是一个数组，是前面生成的 N 个光子的能量，但是是整数。
+    # 接下来我们得到一个更连续的能量值数组          
+    left  = spectrum_bins[idx] - 0.5                             
+    right = spectrum_bins[idx] + 0.5
+    # 在区间内均匀抽样，np.random.rand( len(idx))生成 一个 1 以内 的浮点随机数。中心值加这个随机数，细化能量谱                               
+    energies = left + np.random.rand( len(idx)) * (right - left)  # energies 是一个数组，是被细化后的，更连续的，N个光子的能量值
+    
+    Ne = energies * g_mat       # kv能量的光子在晶体中产生相应的电子数 
+    amplitudes = Ne * 1.602e-19 / Cf     # 1.602e-19 为单个电子的电荷量
 
+    print(Ne)
+                              
     # 5）生成时间轴与信号
     t_axis = np.arange(0, T_total, dt)
     signal = np.zeros_like(t_axis)
-
-    # pulse_samples = int(pulse_width / dt)   # 每个脉冲持续 25 个采样时间点
-    # for ti, Ai in zip(times, amplitudes):
-    #     i0 = int(ti / dt)
-    #     i1 = min(i0 + pulse_samples, len(signal))
-    #     signal[i0:i1] += Ai
-
-
+ 
+     # 6）生成 方波 或 高斯波 时间序列
     if pulse_shape == 'rect':
         pulse_samples = max(1, int(round(pulse_width / dt)))
         print('pulse_samples:', pulse_samples)
