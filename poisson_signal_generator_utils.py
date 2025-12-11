@@ -39,7 +39,8 @@ def add_gaussian_pulse(signal, t0, amplitude, fwhm, dt):
 
 
 def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
-                    pulse_width=25e-9, dt=1e-9, g_mat = 1, Cf = 40e-15,
+                    pulse_width=15e-9, dt=1e-9, g_mat = 1, 
+                    noise_ENC = 0, Cf = 40e-15,
                     pulse_shape='rect',          # 'rect' 或 'gauss'
                     ):
     """"
@@ -52,7 +53,8 @@ def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
     pulse_width   | 每个脉冲宽度(秒)                                       | 25e-9 (25 ns) 
     dt            | 采样时间步长(秒)                                       | 1e-9 (1 ns)   
     g_mat         | 1 keV 的光子产生的 电子数                               | 可设 1.0     
-    Capacitance   | 典型的 CdTe/CZT PCD 前端电容量级                        | 40e-15 F        
+    noise_ENC     | 芯片的等效噪声电荷数
+    Cf            | 典型的 CdTe/CZT PCD 前端电容量级                        | 40e-15 F        
   
     """
     # 1）归一化谱
@@ -85,10 +87,14 @@ def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
     # 在区间内均匀抽样，np.random.rand( len(idx))生成 一个 1 以内 的浮点随机数。中心值加这个随机数，细化能量谱                               
     energies = left + np.random.rand( len(idx)) * (right - left)  # energies 是一个数组，是被细化后的，更连续的，N个光子的能量值
     
-    Ne = energies * g_mat       # kv能量的光子在晶体中产生相应的电子数 
-    amplitudes = Ne * 1.602e-19 / Cf     # 1.602e-19 为单个电子的电荷量
+    Ne = energies * g_mat  
+    Ne_noisy = Ne  + np.random.normal(0, noise_ENC, size=Ne.shape)     # kv能量的光子在晶体中产生相应的电子数 
+    Ne_noisy = np.maximum(Ne_noisy, 0.0)
 
+    amplitudes = Ne_noisy * 1.602e-19 / Cf     # 1.602e-19 为单个电子的电荷量
     print(Ne)
+    print(Ne_noisy)
+    print(amplitudes)
                               
     # 5）生成时间轴与信号
     t_axis = np.arange(0, T_total, dt)
@@ -113,6 +119,8 @@ def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
  
  
     return t_axis, signal, times, amplitudes
+
+
 
 
 def make_threshold_grid_from_energy(bins, gain=1.0, n_thr=256, vmin=None, vmax=None):
