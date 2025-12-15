@@ -1,6 +1,44 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import math 
+e_charge = 1.602e-19
+
+
+def make_threshold_grid_from_LSB(a_keV_per_LSB,
+                                 b_keV,
+                                 g_mat,
+                                 Cf,
+                                 n_thr=256,
+                                 clip_E_min=None):
+    """
+    根据像素的能量标定 (a,b)、材料转换系数 g_mat、反馈电容 Cf，
+    把 LSB -> E_thr -> N_e_thr -> V_thr，生成真正的“阈值电压”数组。
+
+    返回:
+        thr_grid_V : 形状 (n_thr,) 的数组，单位 V
+        lsb_values : 对应的 LSB 0..n_thr-1
+        E_thr_keV  : 对应的阈值能量 (keV)，方便后续画图或分析
+    """
+    lsb_values = np.arange(n_thr)  # 0,1,...,255
+
+    # 1) LSB -> 能量 (keV)
+    E_thr_keV = a_keV_per_LSB * lsb_values + b_keV
+
+    # print(E_thr_keV)
+
+    # 有些低 LSB 会对应负能量，物理上等同于“阈值低于0”，可以裁剪到 0
+    # if clip_E_min is not None:
+    #     E_thr_keV = np.maximum(E_thr_keV, clip_E_min)
+ 
+
+    # 2) 能量 -> 电子数
+    Ne_thr = g_mat * E_thr_keV  # g_mat = 1000/W, W=4.5 eV
+
+    # 3) 电子数 -> 阈值电压 (V)
+    thr_grid_V = Ne_thr * e_charge / Cf
+
+    return thr_grid_V, lsb_values, E_thr_keV
+
 
 def add_gaussian_pulse(signal, t0, amplitude, fwhm, dt):
     """
@@ -37,6 +75,100 @@ def add_gaussian_pulse(signal, t0, amplitude, fwhm, dt):
         gj1 = gj0 + (j1 - j0)
         signal[j0:j1] += amplitude * g[gj0:gj1]
 
+import numpy as np
+
+# def add_baseline_noise(signal, noise_ENC, Cf, dt, tau_n):
+#     """
+#     使用 AR(1) 过程生成带相关性的噪声（等效噪声脉宽 = tau_n）
+#     tau_n 通常设置为 pulse_width = 15ns
+#     """
+#     if noise_ENC is None or noise_ENC <= 0:
+#         return signal 
+
+#     sigma_V = noise_ENC * e_charge / Cf    # 目标噪声电压的 RMS（来源于 ENC）
+
+#     # AR(1) 系数（相关尺度 = tau_n）
+#     alpha = np.exp(-dt / tau_n)
+
+#     # 保证稳态方差 = sigma_V^2
+#     sigma_w = sigma_V * np.sqrt(1 - alpha**2)
+
+#     n = len(signal)
+#     noise = np.zeros(n)
+
+#     # 生成 AR(1) 噪声
+#     for i in range(1, n):
+#         noise[i] = alpha * noise[i-1] + sigma_w * np.random.randn()
+
+#     return signal + noise
+
+
+def add_baseline_noise(signal, noise_ENC, Cf, dt, tau_n):
+    sigma_V = noise_ENC * e_charge / Cf
+    alpha = np.exp(-dt / tau_n)
+    sigma_w = sigma_V * np.sqrt(1 - alpha**2)
+
+    noise = np.zeros_like(signal)
+    for i in range(1, len(signal)):
+        noise[i] = alpha * noise[i-1] + sigma_w * np.random.randn()
+    return signal + noise
+
+
+
+# ----------------------------
+# 1) Poisson 到达时间  
+# ----------------------------
+def poisson_arrivals(photon_rate, T_total, rng=np.random):
+    t = 0.0     # t 表示当前的时间; 
+    times = []  # times 保存每个光子事件的到达时刻。
+    while t < T_total:
+        # “模拟一次新的光子到达” → “时间向前跳一个随机的间隔 Δt”。
+        #  这里，np.random.exponential(1.0 / photon_rate) 为一个随机时间间隔 Δt
+        t += rng.exponential(1.0 / photon_rate)  # photon_rate 光子到达的平均时间间隔
+        if t < T_total:
+            times.append(t)
+    return np.array(times)
+
+   # 3）根据谱抽样能量
+def sample_energies_from_pdf(spectrum_bins, spectrum_pdf, n_events):
+    pdf = spectrum_pdf / np.sum(spectrum_pdf)
+    cdf = np.cumsum(pdf)
+
+    u = np.random.rand(n_events)    # 随机均匀地抽取 N(len(times)) 个光子，赋予一个随机数，这些随机数在0-1之间
+    idx = np.searchsorted(cdf, u)   # 通过u里的随机数，与cdf表匹配，生成idx，这是不同的能量区间
+
+    # 对能谱做更细的抽样，得到连续谱，而非阶梯状的谱        
+    # spectrum_bins[idx] 是一个数组，是前面生成的 N 个光子的能量，但是是整数。
+    # 接下来我们得到一个更连续的能量值数组
+    left = spectrum_bins[idx] - 0.5 
+    right = spectrum_bins[idx] + 0.5
+    # 在区间内均匀抽样，np.random.rand( len(idx))生成 一个 1 以内 的浮点随机数。中心值加这个随机数，细化能量谱
+    E = left + np.random.rand(n_events) * (right - left)
+    return E
+
+# ----------------------------
+# 2) 积分节点：电荷注入到 Cf + 指数释放（τ_decay）
+#    Vint[n] = alpha*Vint[n-1] + (Q_inj[n]/Cf)
+# ----------------------------
+def integrate_with_decay(event_times, event_volt_steps, t_axis, dt, tau_decay):
+    """
+    event_volt_steps: 每个事件在积分节点造成的瞬时电压阶跃 ΔV = Q/Cf (单位 V)
+    """
+    n = len(t_axis)
+    alpha = np.exp(-dt / tau_decay)  # 衰减系数
+    Vint = np.zeros(n, dtype=float)
+
+    # 把事件投到采样点上（同一个采样点可叠加多个事件）
+    inj = np.zeros(n, dtype=float)
+    idx = (event_times / dt).astype(int)   # 将事件时间轴上，以dt为间隔，得到一个整数的离散化的序列号索引
+    idx = idx[(idx >= 0) & (idx < n)]
+    for i, dv in zip(idx, event_volt_steps[:len(idx)]):
+        inj[i] += dv
+
+    for k in range(1, n):
+        Vint[k] = alpha * Vint[k - 1] + inj[k]
+    return Vint
+
 
 def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
                     pulse_width=15e-9, dt=1e-9, g_mat = 1, 
@@ -57,47 +189,52 @@ def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
     Cf            | 典型的 CdTe/CZT PCD 前端电容量级                        | 40e-15 F        
   
     """
-    # 1）归一化谱
-    pdf = spectrum_pdf / np.sum(spectrum_pdf) 
-    cdf = np.cumsum(pdf) 
- 
 
+  
     # 2）泊松过程生成到达时间
-    t, times = 0.0, []      # t 表示当前的时间; times 保存每个光子事件的到达时刻。
-    # 循环执行， 得到从 0 到 T_total 内所有的随机到达时间。
-    while t < T_total:
-        # “模拟一次新的光子到达” → “时间向前跳一个随机的间隔 Δt”。
-        #  这里，np.random.exponential(1.0 / photon_rate) 为一个随机时间间隔 Δt
-        t += np.random.exponential(1.0 / photon_rate)  # photon_rate 光子到达的平均时间间隔
-        if t < T_total:
-            times.append(t)
-    times = np.array(times)
- 
+    # t, event_times = 0.0, []      # t 表示当前的时间; event_times 保存每个光子事件的到达时刻。
+    # # 循环执行， 得到从 0 到 T_total 内所有的随机到达时间。
+    # while t < T_total:
+    #     # “模拟一次新的光子到达” → “时间向前跳一个随机的间隔 Δt”。
+    #     #  这里，np.random.exponential(1.0 / photon_rate) 为一个随机时间间隔 Δt
+    #     t += np.random.exponential(1.0 / photon_rate)  # photon_rate 光子到达的平均时间间隔
+    #     if t < T_total:
+    #         event_times.append(t)
+    # event_times = np.array(event_times)
+    # 事件到达
+    event_times = poisson_arrivals(photon_rate, T_total)
+    n_events = len(event_times)
 
-    # 3）根据谱抽样能量
-    u = np.random.rand(len(times))  # 随机均匀地抽取 N(len(times)) 个光子，赋予一个随机数，这些随机数在0-1之间
-    idx = np.searchsorted(cdf, u)   # 通过u里的随机数，与cdf表匹配，生成idx，这是不同的能量区间
+    # # 1）归一化谱 根据谱抽样能量
+    # pdf = spectrum_pdf / np.sum(spectrum_pdf) 
+    # cdf = np.cumsum(pdf) 
+
+    # u = np.random.rand(len(event_times))  # 随机均匀地抽取 N(len(event_times)) 个光子，赋予一个随机数，这些随机数在0-1之间
+    # idx = np.searchsorted(cdf, u)   # 通过u里的随机数，与cdf表匹配，生成idx，这是不同的能量区间
+
+    # # 4）对能谱做更细的抽样，得到连续谱，而非阶梯状的谱        
+    # # spectrum_bins[idx] 是一个数组，是前面生成的 N 个光子的能量，但是是整数。
+    # # 接下来我们得到一个更连续的能量值数组          
+    # left  = spectrum_bins[idx] - 0.5                             
+    # right = spectrum_bins[idx] + 0.5
+    # # 在区间内均匀抽样，np.random.rand( len(idx))生成 一个 1 以内 的浮点随机数。中心值加这个随机数，细化能量谱                               
+    # energies = left + np.random.rand( len(idx)) * (right - left)  # energies 是一个数组，是被细化后的，更连续的，N个光子的能量值
+
+    energies = sample_energies_from_pdf(spectrum_bins, spectrum_pdf, n_events)
 
 
-    # 4）对能谱做更细的抽样，得到连续谱，而非阶梯状的谱        
-    # spectrum_bins[idx] 是一个数组，是前面生成的 N 个光子的能量，但是是整数。
-    # 接下来我们得到一个更连续的能量值数组          
-    left  = spectrum_bins[idx] - 0.5                             
-    right = spectrum_bins[idx] + 0.5
-    # 在区间内均匀抽样，np.random.rand( len(idx))生成 一个 1 以内 的浮点随机数。中心值加这个随机数，细化能量谱                               
-    energies = left + np.random.rand( len(idx)) * (right - left)  # energies 是一个数组，是被细化后的，更连续的，N个光子的能量值
-    
-    Ne = energies * g_mat  
-    Ne_noisy = Ne  + np.random.normal(0, noise_ENC, size=Ne.shape)     # kv能量的光子在晶体中产生相应的电子数 
-    Ne_noisy = np.maximum(Ne_noisy, 0.0)
 
-    amplitudes = Ne_noisy * 1.602e-19 / Cf     # 1.602e-19 为单个电子的电荷量
-    print(Ne)
-    print(Ne_noisy)
-    print(amplitudes)
-                              
-    # 5）生成时间轴与信号
+    Ne = energies * g_mat   
+    Q_charge = Ne * e_charge
+    V_pulse = Q_charge / Cf     
+
+    # 积分节点动力学（指数释放）
     t_axis = np.arange(0, T_total, dt)
+    Vint = integrate_with_decay(event_times, V_pulse, t_axis, dt, tau_decay=150e-9 )
+                              
+
+
+    # 5）生成时间轴与信号
     signal = np.zeros_like(t_axis)
  
      # 6）生成 方波 或 高斯波 时间序列
@@ -105,20 +242,22 @@ def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
         pulse_samples = max(1, int(round(pulse_width / dt)))
         print('pulse_samples:', pulse_samples)
 
-        for ti, Ai in zip(times, amplitudes):
+        for ti, Ai in zip(event_times, V_pulse):
             i0 = int(ti / dt)           # 在帧率 dt 的刻度下，于i0个点作为起始开始采集点
             i1 = min(i0 + pulse_samples, len(signal))   # 采样 i0 + pulse_samples 个点，pulse_samples 是脉宽
             if i0 < len(signal):
                 signal[i0:i1] += Ai
 
     elif pulse_shape == 'gauss':
-        for ti, Ai in zip(times, amplitudes):
+        for ti, Ai in zip(event_times, V_pulse):
             add_gaussian_pulse(signal, ti, Ai, pulse_width, dt)
     else:
         raise ValueError("pulse_shape must be 'rect' or 'gauss'.")
+
+    signal = add_baseline_noise(signal, noise_ENC, Cf, dt, tau_n=pulse_width)
  
- 
-    return t_axis, signal, times, amplitudes
+
+    return t_axis, signal, event_times, V_pulse
 
 
 
@@ -181,13 +320,21 @@ def count_crossings(sig, thr, eps=1e-12 ):
     return int(rise.sum())
 
 
-def spectrum_from_signal(sig, thr_grid): 
+def spectrum_from_signal(sig, thr_grid, lsb_values=None): 
     integral_counts = np.array(
         [count_crossings(sig, thr) for thr in thr_grid], dtype=float
         )
-    differential = -np.gradient(integral_counts, thr_grid)
+    if lsb_values is None:
+        # 默认当 thr_grid 等间隔时
+        differential = -np.gradient(integral_counts)
+    else:
+        # 用 LSB 作为自变量，而不是 thr_grid（V）
+        differential = -np.gradient(integral_counts, lsb_values)
+    # differential = -np.gradient(integral_counts, thr_grid)
     return integral_counts, differential
- 
+
+
+
 def plot_signals_over_time(
     t, signals, *,
     max_plot=None,        # 限制绘制次数（防止太密）
