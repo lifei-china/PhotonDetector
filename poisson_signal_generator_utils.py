@@ -168,6 +168,63 @@ def integrate_with_decay(event_times, event_volt_steps, t_axis, dt, tau_decay):
     for k in range(1, n):
         Vint[k] = alpha * Vint[k - 1] + inj[k]
     return Vint
+ 
+# ----------------------------
+# 3) shaper（整形滤波器）CR-RC
+#     
+# ----------------------------
+def cr_filter(x, dt, tau_cr):
+    """一阶高通（CR），去除 DC / 基线漂移"""
+    a = np.exp(-dt / tau_cr)
+    y = np.zeros_like(x, dtype=float)
+    for n in range(1, len(x)):
+        y[n] = a * (y[n-1] + x[n] - x[n-1])
+    return y
+
+def rc_filter(x, dt, tau_rc):
+    """一阶低通（RC），平滑成钟形"""
+    a = np.exp(-dt / tau_rc)
+    y = np.zeros_like(x, dtype=float)
+    for n in range(1, len(x)):
+        y[n] = a * y[n-1] + (1 - a) * x[n]
+    return y
+
+def shaper_cr_rc(vint, dt, tau_cr, tau_rc):
+    """CR-RC: 高通后低通"""
+    return rc_filter(cr_filter(vint, dt, tau_cr), dt, tau_rc)
+
+def measure_fwhm(t, y):
+    y = y - np.min(y)
+    if np.max(y) <= 0:
+        return np.nan
+    half = 0.5 * np.max(y)
+    idx = np.where(y >= half)[0]
+    if len(idx) < 2:
+        return np.nan
+    return t[idx[-1]] - t[idx[0]]
+
+def impulse_response_fwhm(dt, tau_cr, tau_rc, n=2000):
+    # 对单位冲激响应求整形后的 FWHM
+    x = np.zeros(n); x[0] = 1.0
+    y = shaper_cr_rc(x, dt, tau_cr, tau_rc)
+    t = np.arange(n) * dt
+    return measure_fwhm(t, y)
+
+def tune_tau_rc_for_fwhm(dt, target_fwhm=15e-9, tau_cr=2e-9, lo=0.5e-9, hi=20e-9, iters=30):
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        f = impulse_response_fwhm(dt, tau_cr, mid)
+        if np.isnan(f):
+            lo = mid
+            continue
+        if f < target_fwhm:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+ 
+
+
 
 
 def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
@@ -226,34 +283,58 @@ def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
 
     Ne = energies * g_mat   
     Q_charge = Ne * e_charge
-    V_pulse = Q_charge / Cf     
+    V_pulse = Q_charge / Cf         # Cf 为反馈电容
 
     # 积分节点动力学（指数释放）
     t_axis = np.arange(0, T_total, dt)
     Vint = integrate_with_decay(event_times, V_pulse, t_axis, dt, tau_decay=150e-9 )
                               
+    plt.figure(figsize=(10, 3))
+    plt.plot(t_axis * 1e6, Vint * 1e3)
+    plt.xlabel("Time (µs)")
+    plt.ylabel("Vint (mV)")
+    plt.title("Integrator node voltage Vint(t)")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
+    # 选择一个感兴趣的时间窗口（例如 5.0–5.3 µs）
+    t0 = 5.0e-6
+    t1 = 6.3e-6
+    mask = (t_axis >= t0) & (t_axis <= t1)
+    plt.figure(figsize=(10, 3))
+    plt.plot((t_axis[mask] - t0) * 1e9, Vint[mask] * 1e3)
+    plt.xlabel("Time relative to t0 (ns)")
+    plt.ylabel("Vint (mV)")
+    plt.title(f"Vint(t) zoomed: {t0*1e6:.1f}–{t1*1e6:.1f} µs")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
 
     # 5）生成时间轴与信号
-    signal = np.zeros_like(t_axis)
+    # signal = np.zeros_like(t_axis)
  
-     # 6）生成 方波 或 高斯波 时间序列
-    if pulse_shape == 'rect':
-        pulse_samples = max(1, int(round(pulse_width / dt)))
-        print('pulse_samples:', pulse_samples)
+    #  # 6）生成 方波 或 高斯波 时间序列
+    # if pulse_shape == 'rect':
+    #     pulse_samples = max(1, int(round(pulse_width / dt)))
+    #     print('pulse_samples:', pulse_samples)
 
-        for ti, Ai in zip(event_times, V_pulse):
-            i0 = int(ti / dt)           # 在帧率 dt 的刻度下，于i0个点作为起始开始采集点
-            i1 = min(i0 + pulse_samples, len(signal))   # 采样 i0 + pulse_samples 个点，pulse_samples 是脉宽
-            if i0 < len(signal):
-                signal[i0:i1] += Ai
+    #     for ti, Ai in zip(event_times, V_pulse):
+    #         i0 = int(ti / dt)           # 在帧率 dt 的刻度下，于i0个点作为起始开始采集点
+    #         i1 = min(i0 + pulse_samples, len(signal))   # 采样 i0 + pulse_samples 个点，pulse_samples 是脉宽
+    #         if i0 < len(signal):
+    #             signal[i0:i1] += Ai
 
-    elif pulse_shape == 'gauss':
-        for ti, Ai in zip(event_times, V_pulse):
-            add_gaussian_pulse(signal, ti, Ai, pulse_width, dt)
-    else:
-        raise ValueError("pulse_shape must be 'rect' or 'gauss'.")
+    # elif pulse_shape == 'gauss':
+    #     for ti, Ai in zip(event_times, V_pulse):
+    #         add_gaussian_pulse(signal, ti, Ai, pulse_width, dt)
+    # else:
+    #     raise ValueError("pulse_shape must be 'rect' or 'gauss'.")
 
+    tau_cr = 2e-9
+    tau_rc = tune_tau_rc_for_fwhm(dt, target_fwhm=15e-9, tau_cr=tau_cr)
+    signal = shaper_cr_rc(Vint, dt, tau_cr, tau_rc)
+    print("tau_rc tuned to:", tau_rc, "s")
     signal = add_baseline_noise(signal, noise_ENC, Cf, dt, tau_n=pulse_width)
  
 
