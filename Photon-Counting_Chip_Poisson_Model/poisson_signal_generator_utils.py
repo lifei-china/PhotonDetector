@@ -25,13 +25,6 @@ def make_threshold_grid_from_LSB(a_keV_per_LSB,
     # 1) LSB -> 能量 (keV)
     E_thr_keV = a_keV_per_LSB * lsb_values + b_keV
 
-    # print(E_thr_keV)
-
-    # 有些低 LSB 会对应负能量，物理上等同于“阈值低于0”，可以裁剪到 0
-    # if clip_E_min is not None:
-    #     E_thr_keV = np.maximum(E_thr_keV, clip_E_min)
- 
-
     # 2) 能量 -> 电子数
     Ne_thr = g_mat * E_thr_keV  # g_mat = 1000/W, W=4.5 eV
 
@@ -39,43 +32,6 @@ def make_threshold_grid_from_LSB(a_keV_per_LSB,
     thr_grid_V = Ne_thr * e_charge / Cf
 
     return thr_grid_V, lsb_values, E_thr_keV
-
-
-def add_gaussian_pulse(signal, t0, amplitude, fwhm, dt):
-    """
-    在 signal 上叠加一个以 t0 为中心的高斯脉冲。
-    参数:
-    --------
-    signal : np.ndarray
-        要叠加的目标信号数组（原地修改）
-    t0 : float
-        脉冲中心时间 (s)
-    amplitude : float
-        脉冲峰值幅度（高斯峰值）
-    fwhm : float
-        脉冲全宽半高 (Full Width at Half Maximum, s)
-    dt : float
-        采样时间步长 (s)
-    """
-    # FWHM 转换为 sigma
-    sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
-
-    # 取 ±3σ 的高斯窗口（超过这个范围的值可以忽略）
-    half = int(np.ceil(3.0 * sigma / dt))
-    tw = (np.arange(-half, half + 1) * dt)
-
-    # 峰值归一化（最大值=1），面积随 σ 改变
-    g = np.exp(-0.5 * (tw / sigma) ** 2)
-
-    # 找到中心索引并写入信号
-    ic = int(round(t0 / dt))
-    i0, i1 = ic - half, ic + half + 1
-    j0, j1 = max(0, i0), min(len(signal), i1)
-    if j0 < j1:
-        gj0 = j0 - i0
-        gj1 = gj0 + (j1 - j0)
-        signal[j0:j1] += amplitude * g[gj0:gj1]
- 
  
 
 
@@ -105,7 +61,9 @@ def poisson_arrivals(photon_rate, T_total, rng=np.random):
             times.append(t)
     return np.array(times)
 
-   # 3）根据谱抽样能量
+# ----------------------------
+# 2）根据谱抽样能量
+# ----------------------------
 def sample_energies_from_pdf(spectrum_bins, spectrum_pdf, n_events):
     pdf = spectrum_pdf / np.sum(spectrum_pdf)
     cdf = np.cumsum(pdf)
@@ -123,7 +81,7 @@ def sample_energies_from_pdf(spectrum_bins, spectrum_pdf, n_events):
     return E
 
 # ----------------------------
-# 2) 积分节点：电荷注入到 Cf + 指数释放（τ_decay）
+# 3) 积分节点：电荷注入到 Cf + 指数释放（τ_decay）
 #    Vint[n] = alpha*Vint[n-1] + (Q_inj[n]/Cf)
 # ----------------------------
 def integrate_with_decay(event_times, event_volt_steps, t_axis, dt, tau_decay):
@@ -146,7 +104,7 @@ def integrate_with_decay(event_times, event_volt_steps, t_axis, dt, tau_decay):
     return Vint
  
 # ----------------------------
-# 3) shaper（整形滤波器）CR-RC
+# 4) shaper（整形滤波器）CR-RC
 #     
 # ----------------------------
 def cr_filter(x, dt, tau_cr):
@@ -198,15 +156,12 @@ def tune_tau_rc_for_fwhm(dt, target_fwhm=15e-9, tau_cr=2e-9, lo=0.5e-9, hi=20e-9
         else:
             hi = mid
     return 0.5 * (lo + hi)
- 
-
 
 
 
 def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
                     pulse_width=15e-9, dt=1e-9, g_mat = 1, 
                     noise_ENC = 0, Cf = 40e-15,
-                    pulse_shape='rect',          # 'rect' 或 'gauss'
                     ):
     """"
     | 参数        | 含义                                                  | 典型值          
@@ -224,99 +179,90 @@ def generate_signal(spectrum_bins, spectrum_pdf, photon_rate, T_total=400e-6,
     """
 
   
-    # 2）泊松过程生成到达时间
-    # t, event_times = 0.0, []      # t 表示当前的时间; event_times 保存每个光子事件的到达时刻。
-    # # 循环执行， 得到从 0 到 T_total 内所有的随机到达时间。
-    # while t < T_total:
-    #     # “模拟一次新的光子到达” → “时间向前跳一个随机的间隔 Δt”。
-    #     #  这里，np.random.exponential(1.0 / photon_rate) 为一个随机时间间隔 Δt
-    #     t += np.random.exponential(1.0 / photon_rate)  # photon_rate 光子到达的平均时间间隔
-    #     if t < T_total:
-    #         event_times.append(t)
-    # event_times = np.array(event_times)
-    # 事件到达
+    # 1）泊松过程生成到达时间 
     event_times = poisson_arrivals(photon_rate, T_total)
     n_events = len(event_times)
 
-    # # 1）归一化谱 根据谱抽样能量
-    # pdf = spectrum_pdf / np.sum(spectrum_pdf) 
-    # cdf = np.cumsum(pdf) 
-
-    # u = np.random.rand(len(event_times))  # 随机均匀地抽取 N(len(event_times)) 个光子，赋予一个随机数，这些随机数在0-1之间
-    # idx = np.searchsorted(cdf, u)   # 通过u里的随机数，与cdf表匹配，生成idx，这是不同的能量区间
-
-    # # 4）对能谱做更细的抽样，得到连续谱，而非阶梯状的谱        
-    # # spectrum_bins[idx] 是一个数组，是前面生成的 N 个光子的能量，但是是整数。
-    # # 接下来我们得到一个更连续的能量值数组          
-    # left  = spectrum_bins[idx] - 0.5                             
-    # right = spectrum_bins[idx] + 0.5
-    # # 在区间内均匀抽样，np.random.rand( len(idx))生成 一个 1 以内 的浮点随机数。中心值加这个随机数，细化能量谱                               
-    # energies = left + np.random.rand( len(idx)) * (right - left)  # energies 是一个数组，是被细化后的，更连续的，N个光子的能量值
-
+    # 2）归一化谱 根据谱抽样能量 
     energies = sample_energies_from_pdf(spectrum_bins, spectrum_pdf, n_events)
 
-
-
+    # 3) 对应生成的电子数、电荷量、电压
     Ne = energies * g_mat   
     Q_charge = Ne * e_charge
     V_pulse = Q_charge / Cf         # Cf 为反馈电容
 
-    # 积分节点动力学（指数释放）
+    # 4）积分节点动力学（指数释放）
     t_axis = np.arange(0, T_total, dt)
     Vint = integrate_with_decay(event_times, V_pulse, t_axis, dt, tau_decay=150e-9 )
-                              
-    plt.figure(figsize=(10, 3))
-    plt.plot(t_axis * 1e6, Vint * 1e3)
-    plt.xlabel("Time (µs)")
-    plt.ylabel("Vint (mV)")
-    plt.title("Integrator node voltage Vint(t)")
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-    # 选择一个感兴趣的时间窗口（例如 5.0–5.3 µs）
-    t0 = 5.0e-6
-    t1 = 6.3e-6
-    mask = (t_axis >= t0) & (t_axis <= t1)
-    plt.figure(figsize=(10, 3))
-    plt.plot((t_axis[mask] - t0) * 1e9, Vint[mask] * 1e3)
-    plt.xlabel("Time relative to t0 (ns)")
-    plt.ylabel("Vint (mV)")
-    plt.title(f"Vint(t) zoomed: {t0*1e6:.1f}–{t1*1e6:.1f} µs")
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.show()
-
-    # 5）生成时间轴与信号
-    # signal = np.zeros_like(t_axis)
  
-    #  # 6）生成 方波 或 高斯波 时间序列
-    # if pulse_shape == 'rect':
-    #     pulse_samples = max(1, int(round(pulse_width / dt)))
-    #     print('pulse_samples:', pulse_samples)
-
-    #     for ti, Ai in zip(event_times, V_pulse):
-    #         i0 = int(ti / dt)           # 在帧率 dt 的刻度下，于i0个点作为起始开始采集点
-    #         i1 = min(i0 + pulse_samples, len(signal))   # 采样 i0 + pulse_samples 个点，pulse_samples 是脉宽
-    #         if i0 < len(signal):
-    #             signal[i0:i1] += Ai
-
-    # elif pulse_shape == 'gauss':
-    #     for ti, Ai in zip(event_times, V_pulse):
-    #         add_gaussian_pulse(signal, ti, Ai, pulse_width, dt)
-    # else:
-    #     raise ValueError("pulse_shape must be 'rect' or 'gauss'.")
-
-    tau_cr = 2e-9
-    tau_rc = tune_tau_rc_for_fwhm(dt, target_fwhm=15e-9, tau_cr=tau_cr)
+    tau_cr = 2e-9       # 经验参数，待确认
+    tau_rc = tune_tau_rc_for_fwhm(dt, target_fwhm= pulse_width, tau_cr=tau_cr)
     signal = shaper_cr_rc(Vint, dt, tau_cr, tau_rc)
     print("tau_rc tuned to:", tau_rc, "s")
+
     signal = add_baseline_noise(signal, noise_ENC, Cf, dt, tau_n=pulse_width)
- 
+  
 
-    return t_axis, signal, event_times, V_pulse
+    return t_axis, signal, event_times, Vint
 
 
+def plot_vint_prefilter(
+    t_axis, Vint,
+    t0=5.0e-6,
+    t1=6.3e-6, 
+):
+    """
+    Plot integrator node voltage Vint(t) BEFORE shaping / filtering.
+    Top: full time window
+    Bottom: zoomed-in window [t0, t1]
+    Parameters
+    ----------
+    t_axis : ndarray
+        Time axis [s]
+    Vint : ndarray
+        Integrator voltage [V]
+    t0, t1 : float
+        Zoom window start/end [s]
+    save_path : str or Path or None
+        If given, save figure
+    show : bool
+        Whether to plt.show()
+    """
+
+    fig, (ax_top, ax_bot) = plt.subplots(
+        2, 1,
+        figsize=(10, 6),
+        sharex=False
+    )
+
+    # =========================
+    # Top panel: full waveform
+    # =========================
+    ax_top.plot(t_axis * 1e6, Vint * 1e3, lw=1.2)
+    ax_top.set_xlabel("Time (µs)")
+    ax_top.set_ylabel("Vint (mV)")
+    ax_top.set_title("Integrator Node Voltage Vint(t) — Pre-filter")
+    ax_top.grid(alpha=0.3)
+
+    # =========================
+    # Bottom panel: zoomed view
+    # =========================
+    mask = (t_axis >= t0) & (t_axis <= t1)
+    ax_bot.plot(
+        (t_axis[mask] - t0) * 1e9,
+        Vint[mask] * 1e3,
+        lw=1.5
+    )
+    ax_bot.set_xlabel("Time relative to t₀ (ns)")
+    ax_bot.set_ylabel("Vint (mV)")
+    ax_bot.set_title(
+        f"Zoomed view (pre-filter): {t0*1e6:.1f}–{t1*1e6:.1f} µs"
+    )
+    ax_bot.grid(alpha=0.3)
+
+    fig.tight_layout()
+  
+    return fig
 
 
 def make_threshold_grid_from_energy(bins, gain=1.0, n_thr=256, vmin=None, vmax=None):
@@ -329,8 +275,7 @@ def make_threshold_grid_from_energy(bins, gain=1.0, n_thr=256, vmin=None, vmax=N
     if vmin is None: vmin = max(0.0, gain * E_min)
     if vmax is None: vmax = gain * E_max
     return np.linspace(vmin, vmax, n_thr)
-
-import numpy as np
+ 
 
 def build_energy_bins_and_pdf(energies, values, normalize=True):
     """
@@ -395,12 +340,14 @@ def spectrum_from_signal(sig, thr_grid, lsb_values=None):
 def plot_signals_over_time(
     t, signals, *,
     max_plot=None,        # 限制绘制次数（防止太密）
-    alpha=0.4,            # 单条曲线透明度 
+    alpha=0.4,            # 单条曲线透明度
     zoom=None,            # 时间窗口 (start_us, end_us)
-    figsize=(10, 4)       # 图大小
-):
+    figsize=(10, 4),      # 图大小
+    save_path=None,       # 保存路径（str / Path / None）
+    show=True             # 是否显示
+    ):
     """
-    绘制多次模拟信号随时间的叠加图，可选显示平均波形，并支持放大时间窗口。
+    绘制多次模拟信号随时间的叠加图，并可选择保存到文件。
 
     参数
     ----
@@ -412,12 +359,14 @@ def plot_signals_over_time(
         仅绘制前 max_plot 条曲线
     alpha : float, 可选
         线条透明度
-    show_avg : bool, 可选
-        是否绘制平均波形
     zoom : tuple(float, float), 可选
         时间窗口，单位 μs，例如 zoom=(5.0, 5.5)
     figsize : tuple, 可选
         图形大小
+    save_path : str or Path, 可选
+        若提供，则保存图片到该路径
+    show : bool, 可选
+        是否调用 plt.show()
     """
 
     n_total = len(signals)
@@ -435,10 +384,14 @@ def plot_signals_over_time(
         signals = [sig[mask] for sig in signals]
 
     # 绘制
-    plt.figure(figsize=figsize)
+    fig = plt.figure(figsize=figsize)
     for i, sig in enumerate(signals):
-        plt.plot(t_us, sig, alpha=alpha, lw=1, label=f'Run {i+1}' if i < 5 else None)
- 
+        plt.plot(
+            t_us, sig,
+            alpha=alpha,
+            lw=1,
+            label=f'Run {i+1}' if i < 5 else None
+        )
 
     plt.xlabel('Time (μs)')
     plt.ylabel('Signal Amplitude (arb. unit)')
@@ -447,11 +400,25 @@ def plot_signals_over_time(
         title += f' — Zoomed: {zoom[0]:.2f}–{zoom[1]:.2f} μs'
     plt.title(title)
     plt.grid(alpha=0.3)
-    if len(signals) <= 5 :
+
+    if len(signals) <= 5:
         plt.legend(loc="upper right")
+
     plt.tight_layout()
-    plt.show()
- 
+
+    # ✅ 保存
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+
+    # ✅ 显示 or 关闭
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
+
+    return fig
 
 
 def plot_signals_grid(
@@ -647,7 +614,7 @@ def compute_filtered_spectrum(
     xcom_filter_path,
     density,
     thickness_mm_list,
-    plot=True
+    plot=True 
 ):
     """
     参数:
@@ -694,7 +661,7 @@ def compute_filtered_spectrum(
 
     # ------------------ 4. 是否绘图 ------------------
     if plot:
-        plt.figure(figsize=(10, 6))
+        fig = plt.figure(figsize=(10, 6)) 
         plt.plot(E_keV, Phi_in, 'k-', linewidth=2, label="Source Spectrum")
 
         colors = ['red','blue','green','orange','purple','cyan']
@@ -714,7 +681,8 @@ def compute_filtered_spectrum(
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.show()
+        plt.close(fig)
 
-    return E_keV, Phi_in, Phi_out_list
+    return E_keV, Phi_in, Phi_out_list, fig
 
  

@@ -1,0 +1,43 @@
+#   density_Ce = 6.77
+#   density_Gd = 7.90
+#   density_W  = 19.3
+#   density_Pb = 11.34
+#   density_Al = 2.70
+
+spectrum:
+  spek_path: "spectrum_file/spek_120.txt"
+  xcom_filter_path: "spectrum_file/Gd_mu_over_rho.csv"
+  density: 7.90
+  thickness_mm_list: [0.001, 0.3, 1.2]
+  thickness_index: 1
+  plot_filtered_spectrum: true
+
+source:
+  voltage_kvp: 120
+  current_mA: 10.0
+  distance_m: 0.30
+  pixel_length_m: 0.00034
+
+chip:
+  pulse_s: 1.5e-8
+  delta_t_s: 1e-9
+  integral_time_s: 4.0e-4
+  Cf_F: 4.0e-14
+  noise_ENC: 330
+  W_eV: 4.5
+
+calib:
+  a_keV_per_LSB: 0.85
+  b_keV: -36.85
+  n_thr: 256
+
+run:
+  n_runs: 1
+  seed: 0
+  smooth_sigma: 3.5
+  plot_signals: true
+  max_plot_signals: 5
+  zoom: [5.0, 5.2]
+  results_root: "results"
+  exp_name: "Gd_0p3mm_120kV_10mA"
+  show_plots: true
