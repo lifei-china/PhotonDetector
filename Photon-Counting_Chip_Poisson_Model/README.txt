@@ -1,7 +1,7 @@
 
 ============================================================
-    Photon-Counting ASIC Model (Poisson-based)
-    基于泊松的光子计数 ASIC 模型
+   PC-PCM（Photon-Counting Chip Poisson Model）
+    基于泊松分布的光子计数芯片模型
 ============================================================
 这是一个面向光子计数探测器（Photon Counting Detector, PCD）
 前端芯片的物理模型工具。
