@@ -64,7 +64,7 @@ def simulate_runs_dict(bins, pdf, photon_rate, thr_grid, lsb_values,
         print("[THR] in-range count   =", np.sum((thr_grid >= sig.min()) & (thr_grid <= sig.max())))
 
 
-        integ, diff = spectrum_from_signal(sig, thr_grid, x_axis=thr_grid)
+        integ, diff = spectrum_from_signal(sig, thr_grid_local, x_axis=thr_grid_local)
 
         # print("thr_local min/max =", thr_grid_local.min(), thr_grid_local.max())
         print("thr min/max =", thr_grid.min(), thr_grid.max())
@@ -118,7 +118,7 @@ def main():
     )
     tau_rc = frontend["tau_rc"]
     k_shaper = frontend["k_shaper"]
- 
+    print("kshaper:",k_shaper) 
 
 
     # (C) 阈值轴 

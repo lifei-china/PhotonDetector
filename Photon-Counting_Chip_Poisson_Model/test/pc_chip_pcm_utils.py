@@ -56,9 +56,6 @@ def init_frontend_shaper_params(
     - 自动求 tau_rc（满足目标 FWHM）
     - 用“单位 CSA 衰减”计算 k_shaper（与 dt 仅有数值误差关系）
     """
-    print("[CALL] dt        =", dt, type(dt))
-    print("[CALL] pulse_w   =", pulse_width, type(pulse_width))
-    print("[CALL] tau_decay =", tau_decay, type(tau_decay))
 
     # 1) 根据目标脉宽，确定 RC 时间常数
     tau_rc = tune_tau_rc_for_fwhm_pz_rc(
@@ -66,21 +63,11 @@ def init_frontend_shaper_params(
         target_fwhm=pulse_width,
         tau_decay=tau_decay
     )
-    # tau_rc = 1.108590767118699e-08
-    print("tau_rc", tau_rc)    
 
     # 2) 构造单位幅度的 CSA 输出（V0 = 1）
-    t = np.arange(n) * dt 
-    event_times = np.array([0.0])
-    event_volt_steps = np.array([1.0])  # Q/Cf = 1
-    vint_unit = integrate_with_decay(
-        event_times,
-        event_volt_steps,
-        t,
-        dt,
-        tau_decay=tau_decay,
-        tau_rise=500e-12
-    )
+    t = np.arange(n) * dt
+    vint_unit = np.exp(-t / tau_decay)   # 等效于 Q/Cf = 1
+    # vint_unit = np.ones_like(t)
     print("max_vint_unit", np.max(vint_unit))
 
     # 3) 通过你当前的整形链
@@ -89,7 +76,6 @@ def init_frontend_shaper_params(
 
     # 4) 峰值即为 k_shaper
     k_shaper = float(np.max(y))
-    print("k_shaper", k_shaper) 
 
     return {
         "tau_rc": tau_rc,
@@ -811,8 +797,7 @@ def plot_and_save_dict(out: Path, cfg: dict, energy_axis, integral_avg, differen
         )
 
     # 三联图保存
-    # fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 10), sharex=True)
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(8, 10), sharex=True)
 
     ax1.plot(energy_axis, integral_avg, lw=1.8)
     ax1.set_ylabel("Integral counts")
@@ -821,24 +806,19 @@ def plot_and_save_dict(out: Path, cfg: dict, energy_axis, integral_avg, differen
     ax2.plot(energy_axis, differential_avg, lw=1.8, label="Differential (-dN/dT)")
     ax2.set_ylabel("Counts per keV")
     ax2.set_title("Differential Spectrum")
-    ax2.set_ylim(0, 100)
+    ax2.set_ylim(-100, 100)
     ax2.legend()
 
-    # ax3.plot(energy_axis, secd, lw=1.0, label="raw")
-    # ax3.plot(energy_axis, secd_smooth, lw=1.8, label=f"Gaussian σ={cfg['run']['smooth_sigma']}")
-    # ax3.set_ylabel("2nd-derivative proxy")
-    # ax3.set_title("Second Derivative (smoothed)")
-    # ax3.set_ylim(-100, 30)
-    # ax3.legend()
+    ax3.plot(energy_axis, secd, lw=1.0, label="raw")
+    ax3.plot(energy_axis, secd_smooth, lw=1.8, label=f"Gaussian σ={cfg['run']['smooth_sigma']}")
+    ax3.set_ylabel("2nd-derivative proxy")
+    ax3.set_title("Second Derivative (smoothed)")
+    ax3.set_ylim(-100, 30)
+    ax3.legend()
 
-    # for ax in (ax1, ax2, ax3):
-    #     ax.set_xticks(np.arange(0, 300, 20))
-    # ax3.set_xlabel("Threshold / Energy (keV)")
-
-    for ax in (ax1, ax2):
-        # ax.set_xticks(np.arange(0, 250, 20))
-        ax.set_xticks(energy_axis[::30]) 
-    ax2.set_xlabel("Threshold (LSB)")
+    for ax in (ax1, ax2, ax3):
+        ax.set_xticks(np.arange(0, 300, 20))
+    ax3.set_xlabel("Threshold / Energy (keV)")
 
     fig.tight_layout()
     fig.savefig(out / "spectra.png", dpi=150, bbox_inches="tight")

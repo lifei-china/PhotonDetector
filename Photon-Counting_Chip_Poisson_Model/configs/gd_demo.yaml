@@ -8,18 +8,18 @@ spectrum:
   spek_path: "spectrum_file/spek_120.txt"
   xcom_filter_path: "spectrum_file/Gd_mu_over_rho.csv"
   density: 7.90
-  thickness_mm_list: [0.001, 0.3, 1.2]
-  thickness_index: 1
+  thickness_mm_list: [0.01, 0.3, 1.2]
+  thickness_index: 0
   plot_filtered_spectrum: true
 
 source:
   voltage_kvp: 120
-  current_mA: 10.0
+  current_mA: 5.0
   distance_m: 0.30
   pixel_length_m: 0.00034
 
 chip:
-  pulse_s: 1.5e-8
+  pulse_s: 1.5e-8    # pulse_width
   delta_t_s: 1e-9
   tau_decay_s: 150e-9
   integral_time_s: 4.0e-4
